@@ -6,7 +6,7 @@ require (
 	github.com/RoaringBitmap/roaring v1.3.0
 	github.com/golang/protobuf v1.5.3
 	github.com/gorilla/mux v1.8.0
-	github.com/longhorn/backupstore v0.0.0-20230627040634-5b4f2d040e9d
+	github.com/longhorn/backupstore v0.0.0-2023090634210-b5235e5ee814
 	github.com/longhorn/longhorn-engine v1.4.0-rc1.0.20230804172754-4d54af9e4ccf
 	github.com/longhorn/sparse-tools v0.0.0-20230529083649-6f15b676a151
 	github.com/pkg/errors v0.9.1
@@ -60,4 +60,6 @@ require (
 	k8s.io/utils v0.0.0-20230406110748-d93618cff8a2 // indirect
 )
 
-replace github.com/longhorn/backupstore v0.0.0-20230627040634-5b4f2d040e9d => github.com/ChanYiLin/backupstore v0.0.0-20230913072807-57da262c78f8
+replace github.com/longhorn/backupstore v0.0.0-2023090634210-b5235e5ee814 => github.com/FrankYang0529/backupstore v0.0.0-20231011033402-fc89d3fe6ed5
+
+replace github.com/longhorn/longhorn-engine v1.4.0-rc1.0.20230804172754-4d54af9e4ccf => github.com/FrankYang0529/longhorn-engine v1.2.1-0.20231011035823-ba10e4329491

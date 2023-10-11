@@ -25,6 +25,7 @@ import (
 	"github.com/longhorn/backing-image-manager/pkg/util"
 	"github.com/longhorn/backing-image-manager/pkg/util/broadcaster"
 
+	butil "github.com/longhorn/backupstore/util"
 	engineutil "github.com/longhorn/longhorn-engine/pkg/util"
 )
 
@@ -602,7 +603,7 @@ func (m *Manager) BackupCreate(ctx context.Context, req *rpc.BackupCreateRequest
 		return nil, err
 	}
 
-	if err := engineutil.SetupCredential(backupType, req.Credential); err != nil {
+	if err := butil.SetupCredential(backupType, req.Credential); err != nil {
 		return nil, err
 	}
 	backingImagePath := types.GetBackingImageFilePath(m.diskPath, req.Name, req.Uuid)

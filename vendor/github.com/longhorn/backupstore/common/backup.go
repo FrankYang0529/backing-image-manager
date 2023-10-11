@@ -170,7 +170,7 @@ func SortBackupBlocks(blocks []BlockMapping, size, blockSize int64) []BlockMappi
 	return blockMappings
 }
 
-func CheckBlockReferenceCount(blockInfos map[string]*BlockInfo, blocks []BlockMapping, driver backupstore.BackupStoreDriver) {
+func UpdateBlockReferenceCount(blockInfos map[string]*BlockInfo, blocks []BlockMapping, driver backupstore.BackupStoreDriver) {
 	for _, block := range blocks {
 		info, known := blockInfos[block.BlockChecksum]
 		if !known {

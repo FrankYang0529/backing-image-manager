@@ -191,10 +191,10 @@ func InspectBackupBackingImage(backupURL string) (*BackupInfo, error) {
 		return nil, fmt.Errorf("backup backing image %v is still in progress", backupBackingImage.Name)
 	}
 
-	return fillFullBackupInfo(backupBackingImage, bsDriver.GetURL()), nil
+	return fillFullBackupBackingImageInfo(backupBackingImage, bsDriver.GetURL()), nil
 }
 
-func fillFullBackupInfo(backupBackingImage *BackupBackingImage, destURL string) *BackupInfo {
+func fillFullBackupBackingImageInfo(backupBackingImage *BackupBackingImage, destURL string) *BackupInfo {
 	return &BackupInfo{
 		Name:              backupBackingImage.Name,
 		URL:               EncodeBackupBackingImageURL(backupBackingImage.Name, destURL),

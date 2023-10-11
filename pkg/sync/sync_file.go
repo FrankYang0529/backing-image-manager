@@ -20,6 +20,7 @@ import (
 	"github.com/longhorn/backing-image-manager/pkg/backup"
 	"github.com/longhorn/backing-image-manager/pkg/types"
 	"github.com/longhorn/backing-image-manager/pkg/util"
+	butil "github.com/longhorn/backupstore/util"
 	engineutil "github.com/longhorn/longhorn-engine/pkg/util"
 )
 
@@ -530,7 +531,7 @@ func (sf *SyncingFile) RestoreFromBackupURL(backupURL string, credential map[str
 		return errors.Wrapf(err, "failed to check the type for backup %v", backupURL)
 	}
 
-	if err := engineutil.SetupCredential(backupType, credential); err != nil {
+	if err := butil.SetupCredential(backupType, credential); err != nil {
 		return err
 	}
 

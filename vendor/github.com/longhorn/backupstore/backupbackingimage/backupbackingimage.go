@@ -326,27 +326,16 @@ func RestoreBackingImageBackup(config *RestoreConfig, restoreStatus RestoreStatu
 		return fmt.Errorf("read invalid backing image size %v", backupBackingImage.Size)
 	}
 
-	if _, err := os.Stat(backingImageFilePath); err == nil {
-		logrus.Warnf("File %s for the restore exists, will remove and re-create it", backingImageFilePath)
-		if err := os.RemoveAll(backingImageFilePath); err != nil {
-			return errors.Wrapf(err, "failed to clean up the existing file %v before restore", backingImageFilePath)
-		}
+	backingImageFile, err := checkBackingImageFile(backingImageFilePath, backupBackingImage)
+	if err != nil {
+		return errors.Wrapf(err, "check backing image file failed")
 	}
 
-	backingImageFile, err := os.Create(backingImageFilePath)
-	if err != nil {
-		return err
-	}
 	defer func() {
 		if err != nil {
 			_ = backingImageFile.Close()
 		}
 	}()
-
-	stat, err := backingImageFile.Stat()
-	if err != nil {
-		return err
-	}
 
 	if err := lock.Lock(); err != nil {
 		return err
@@ -358,13 +347,6 @@ func RestoreBackingImageBackup(config *RestoreConfig, restoreStatus RestoreStatu
 
 		progress := &common.Progress{
 			TotalBlockCounts: int64(len(backupBackingImage.Blocks)),
-		}
-
-		if stat.Mode()&os.ModeType == 0 {
-			if err := backingImageFile.Truncate(backupBackingImage.Size); err != nil {
-				restoreStatus.UpdateRestoreProgress(int(progress.ProcessedBlockCounts)*backupstore.DEFAULT_BLOCK_SIZE, err)
-				return
-			}
 		}
 
 		ctx, cancel := context.WithCancel(context.Background())
@@ -379,7 +361,6 @@ func RestoreBackingImageBackup(config *RestoreConfig, restoreStatus RestoreStatu
 		mergedErrChan := common.MergeErrorChannels(ctx, errorChans...)
 		err = <-mergedErrChan
 		if err != nil {
-			logrus.WithError(err).Errorf("Failed to restore backing image %v", backingImageName)
 			restoreStatus.UpdateRestoreProgress(int(progress.ProcessedBlockCounts)*backupstore.DEFAULT_BLOCK_SIZE, err)
 			return
 		}
@@ -388,6 +369,45 @@ func RestoreBackingImageBackup(config *RestoreConfig, restoreStatus RestoreStatu
 	}()
 
 	return nil
+}
+
+func checkBackingImageFile(backingImageFilePath string, backupBackingImage *BackupBackingImage) (*os.File, error) {
+	if _, err := os.Stat(backingImageFilePath); err == nil {
+		logrus.Warnf("File %s for the restore exists, will remove and re-create it", backingImageFilePath)
+		if err := os.RemoveAll(backingImageFilePath); err != nil {
+			return nil, errors.Wrapf(err, "failed to clean up the existing file %v before restore", backingImageFilePath)
+		}
+	}
+
+	backingImageFile, err := os.Create(backingImageFilePath)
+	if err != nil {
+		return nil, err
+	}
+
+	defer func() {
+		if err != nil {
+			_ = backingImageFile.Close()
+		}
+	}()
+
+	stat, err := backingImageFile.Stat()
+	if err != nil {
+		return nil, err
+	}
+
+	// This pre-truncate is to ensure the XFS speculatively
+	// preallocates post-EOF blocks get reclaimed when volDev is
+	// closed.
+	// https://github.com/longhorn/longhorn/issues/2503
+	// We want to truncate regular files, but not device
+	if stat.Mode()&os.ModeType == 0 {
+		if err := backingImageFile.Truncate(backupBackingImage.Size); err != nil {
+			errors.Wrapf(err, "failed to truncate backing image")
+			return nil, err
+		}
+	}
+
+	return backingImageFile, nil
 }
 
 func restoreBlocks(ctx context.Context, bsDriver backupstore.BackupStoreDriver, backingImageFilePath string, in <-chan *common.Block, progress *common.Progress, restoreStatus RestoreStatus) <-chan error {
@@ -496,18 +516,63 @@ func RemoveBackingImageBackup(backupURL string) (err error) {
 	}
 	log.Info("Removed backup backing image config")
 
-	log.Debug("GC started")
-	deleteBlocks := true
+	blockInfos, err := getBlockInfos(bsDriver)
+	if err != nil {
+		return err
+	}
+
 	backupbackingImageNames, err := GetAllBackupBackingImageNames(bsDriver)
 	if err != nil {
 		log.WithError(err).Warn("Failed to load backup backing image names, skip block deletion")
-		deleteBlocks = false
+		return nil
 	}
 
+	canDeleteBlocks := checkAndUpdateBlockInfos(bsDriver, blockInfos, backupbackingImageNames)
+	if !canDeleteBlocks {
+		return nil
+	}
+
+	// check if there have been new backups created while we where processing
+	prevBackupBackingImageNames := backupbackingImageNames
+	backupBackingImageNames, err := GetAllBackupBackingImageNames(bsDriver)
+	if err != nil || !util.UnorderedEqual(prevBackupBackingImageNames, backupBackingImageNames) {
+		log.Info("Found new backup backing image, skip block deletion")
+		return nil
+	}
+
+	// only delete the blocks if it is safe to do so
+	if err := cleanupBlocks(bsDriver, blockInfos); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func checkAndUpdateBlockInfos(bsDriver backupstore.BackupStoreDriver, blockInfos map[string]*common.BlockInfo, backupbackingImageNames []string) bool {
+	log := backupstore.GetLog()
+
+	for _, name := range backupbackingImageNames {
+		backupBackingImage, err := loadBackingImage(bsDriver, name)
+		if err != nil {
+			log.WithError(err).Warn("Failed to load backup backing image, skip block deletion")
+			return false
+		}
+
+		if isBackupInProgress(backupBackingImage) {
+			log.Info("Found in progress backup backing image, skip block deletion")
+			return false
+		}
+
+		common.UpdateBlockReferenceCount(blockInfos, backupBackingImage.Blocks, bsDriver)
+	}
+	return true
+}
+
+func getBlockInfos(bsDriver backupstore.BackupStoreDriver) (map[string]*common.BlockInfo, error) {
 	blockInfos := make(map[string]*common.BlockInfo)
 	blockNames, err := getAllBlockNames(bsDriver)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	for _, name := range blockNames {
@@ -517,40 +582,7 @@ func RemoveBackingImageBackup(backupURL string) (err error) {
 			Refcount: 0,
 		}
 	}
-
-	for _, name := range backupbackingImageNames {
-		log := log.WithField("BackupBackingImage", name)
-		backupBackingImage, err := loadBackingImage(bsDriver, name)
-		if err != nil {
-			log.WithError(err).Warn("Failed to load backup backing image, skip block deletion")
-			deleteBlocks = false
-			break
-		}
-
-		if isBackupInProgress(backupBackingImage) {
-			log.Info("Found in progress backup backing image, skip block deletion")
-			deleteBlocks = false
-			break
-		}
-
-		common.CheckBlockReferenceCount(blockInfos, backupBackingImage.Blocks, bsDriver)
-	}
-
-	// check if there have been new backups created while we where processing
-	prevBackupBackingImageNames := backupbackingImageNames
-	backupBackingImageNames, err := GetAllBackupBackingImageNames(bsDriver)
-	if err != nil || !util.UnorderedEqual(prevBackupBackingImageNames, backupBackingImageNames) {
-		log.Info("Found new backup backing image, skip block deletion")
-		deleteBlocks = false
-	}
-
-	// only delete the blocks if it is safe to do so
-	if deleteBlocks {
-		if err := cleanupBlocks(bsDriver, blockInfos); err != nil {
-			return err
-		}
-	}
-	return nil
+	return blockInfos, nil
 }
 
 func cleanupBlocks(driver backupstore.BackupStoreDriver, blockMap map[string]*common.BlockInfo) error {
